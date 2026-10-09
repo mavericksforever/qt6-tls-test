@@ -11,11 +11,13 @@ Minimal Qt 6 app that makes one HTTPS GET request on launch and shows what Qt's 
 
 The second row shows the connection itself works and only Qt's own version check rejects it.
 
-A URL can be passed as the first argument:
+A URL and `--any-protocol` (same as ticking the checkbox) can be passed on the command line:
 
 ```
-QtTlsTest.app/Contents/MacOS/QtTlsTest https://example.com/
+QtTlsTest.app/Contents/MacOS/QtTlsTest https://example.com/ --any-protocol
 ```
+
+Each request uses a new `QNetworkAccessManager`. A shared one caches the connection per host together with the SSL configuration of the first request, so toggling the checkbox would otherwise have no effect until the cache expires.
 
 ## Building
 

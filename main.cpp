@@ -6,9 +6,14 @@
 // backend checks the negotiated version itself and the hooked
 // SSLGetNegotiatedProtocolVersion reports TLS 1.0.
 //
-// The checkbox switches the request to QSsl::AnyProtocol, which skips that version
-// check. It is only a diagnostic: with it on, the request goes through and Qt shows
-// the protocol it was told was negotiated.
+// The checkbox (or --any-protocol on the command line) switches the request to
+// QSsl::AnyProtocol, which skips that version check. It is only a diagnostic: with it
+// on, the request goes through and Qt shows the protocol it was told was negotiated.
+//
+// Every request uses a new QNetworkAccessManager. QNetworkAccessManager caches
+// connections per host, and a cached connection keeps the QSslConfiguration of the
+// request that created it, so a second request with a different configuration would
+// silently reuse the first one's.
 
 #include <QApplication>
 #include <QCheckBox>
@@ -53,10 +58,19 @@ int main(int argc, char **argv)
     window.setWindowTitle(QStringLiteral("Qt 6 HTTPS Test"));
     window.resize(560, 360);
 
-    const QString defaultUrl = argc > 1 ? QString::fromLocal8Bit(argv[1])
-                                        : QStringLiteral("https://login.microsoftonline.com/");
+    QString defaultUrl = QStringLiteral("https://login.microsoftonline.com/");
+    bool anyProtocolArg = false;
+    const QStringList args = app.arguments().mid(1);
+    for (const QString &arg : args) {
+        if (arg == QLatin1String("--any-protocol"))
+            anyProtocolArg = true;
+        else if (!arg.startsWith(QLatin1String("-")))
+            defaultUrl = arg;
+    }
+
     auto *urlEdit = new QLineEdit(defaultUrl);
     auto *anyProtocol = new QCheckBox(QStringLiteral("Accept any TLS version (diagnostic)"));
+    anyProtocol->setChecked(anyProtocolArg);
     auto *sendButton = new QPushButton(QStringLiteral("Send Request"));
     auto *log = new QPlainTextEdit;
     log->setReadOnly(true);
@@ -75,9 +89,9 @@ int main(int argc, char **argv)
     print(QStringLiteral("Qt %1 on %2").arg(QString::fromLatin1(qVersion()), QSysInfo::prettyProductName()));
     print(QStringLiteral("TLS backend: %1").arg(QSslSocket::activeBackend()));
 
-    auto *manager = new QNetworkAccessManager(&window);
-
     QObject::connect(sendButton, &QPushButton::clicked, &window, [=] {
+        // A fresh manager per request; see the comment at the top of the file.
+        auto *manager = new QNetworkAccessManager;
         QNetworkRequest request(QUrl(urlEdit->text().trimmed()));
         QSslConfiguration config = QSslConfiguration::defaultConfiguration();
         if (anyProtocol->isChecked())
@@ -89,7 +103,7 @@ int main(int argc, char **argv)
         print(QStringLiteral("Requested protocol: %1").arg(protocolName(config.protocol())));
 
         QNetworkReply *reply = manager->get(request);
-        QObject::connect(reply, &QNetworkReply::finished, reply, [=] {
+        QObject::connect(reply, &QNetworkReply::finished, manager, [=] {
             const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
             if (status.isValid()) {
                 // Any HTTP status, including 4xx, means the TLS connection itself worked.
@@ -102,7 +116,7 @@ int main(int argc, char **argv)
             } else {
                 print(QStringLiteral("FAILED: %1").arg(reply->errorString()));
             }
-            reply->deleteLater();
+            manager->deleteLater(); // also deletes the reply, its child
         });
     });
 
