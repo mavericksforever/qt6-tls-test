@@ -1,0 +1,74 @@
+name: Build Qt TLS Test for macOS 10.9
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  QT_VERSION: "6.8.3"
+  DEPLOYMENT_TARGET: "10.9"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install ninja
+
+      - name: Download Qt SDK
+        run: |
+          gh release download v${{ env.QT_VERSION }}-mavericks \
+            --repo mavericksforever/qtbase \
+            --pattern "qt6-mavericks-x86_64.tar.gz" \
+            --pattern "qt6-host-arm64.tar.gz" \
+            --dir /tmp
+          tar xzf /tmp/qt6-mavericks-x86_64.tar.gz -C /tmp
+          tar xzf /tmp/qt6-host-arm64.tar.gz -C /tmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=${{ env.DEPLOYMENT_TARGET }} \
+            -DCMAKE_PREFIX_PATH=/tmp/qt6-mavericks \
+            -DQT_HOST_PATH=/tmp/qt6-host \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Bundle Qt
+        run: |
+          APP=build/QtTlsTest.app
+
+          mkdir -p "$APP/Contents/Frameworks"
+          for fw in QtCore QtGui QtWidgets QtNetwork QtDBus; do
+            [ -d "/tmp/qt6-mavericks/lib/${fw}.framework" ] && \
+              cp -R "/tmp/qt6-mavericks/lib/${fw}.framework" "$APP/Contents/Frameworks/"
+          done
+
+          for dir in platforms styles networkinformation tls; do
+            [ -d "/tmp/qt6-mavericks/plugins/$dir" ] || continue
+            mkdir -p "$APP/Contents/PlugIns/$dir"
+            for p in /tmp/qt6-mavericks/plugins/$dir/*.dylib; do
+              cp "$p" "$APP/Contents/PlugIns/$dir/"
+              install_name_tool -add_rpath @loader_path/../../Frameworks \
+                "$APP/Contents/PlugIns/$dir/$(basename "$p")" 2>/dev/null || true
+            done
+          done
+
+          mkdir -p "$APP/Contents/Resources"
+          printf '[Paths]\nPlugins = PlugIns\n' > "$APP/Contents/Resources/qt.conf"
+
+          hdiutil create -volname "Qt TLS Test" -srcfolder "$APP" \
+            -ov -format UDZO -fs HFS+ build/QtTlsTest-mavericks.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: QtTlsTest-mavericks
+          path: build/QtTlsTest-mavericks.dmg
